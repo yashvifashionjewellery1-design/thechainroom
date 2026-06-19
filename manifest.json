@@ -1,0 +1,17 @@
+{
+  "name": "The Chain Room — My Orders",
+  "short_name": "TCR",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#1b1815",
+  "theme_color": "#1b1815",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

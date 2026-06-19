@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The Chain Room — Diagnostics</title>
+<style>
+  :root {
+    --bg: #1b1815; --panel: #252119; --panel2: #2f2a21; --border: #3d362b;
+    --text: #ece4d6; --muted: #978d7d; --gold: #d4a843; --green: #7fa37a;
+    --red: #c2654f; --amber: #d9a441;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: 16px; max-width: 820px; margin: 0 auto; line-height: 1.45;
+  }
+  h1 { font-size: 20px; margin: 0 0 2px; color: var(--gold); }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .bar {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+  }
+  button {
+    background: var(--gold); color: #1b1815; border: none; border-radius: 10px;
+    padding: 11px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .summary {
+    display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .stat {
+    flex: 1; min-width: 90px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px; text-align: center;
+  }
+  .stat .n { font-size: 24px; font-weight: 700; }
+  .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .stat.pass .n { color: var(--green); }
+  .stat.fail .n { color: var(--red); }
+  .stat.warn .n { color: var(--amber); }
+  .group { margin-bottom: 14px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .group > .head {
+    background: var(--panel2); padding: 10px 14px; font-weight: 600; font-size: 14px;
+    display: flex; justify-content: space-between; align-items: center; cursor: pointer;
+  }
+  .group > .head .count { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .row {
+    display: flex; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--border);
+    font-size: 13px; align-items: flex-start; background: var(--panel);
+  }
+  .row .ic { flex-shrink: 0; width: 18px; text-align: center; font-weight: 700; }
+  .row.pass .ic { color: var(--green); }
+  .row.fail .ic { color: var(--red); }
+  .row.warn .ic { color: var(--amber); }
+  .row.info .ic { color: var(--muted); }
+  .row .body { flex: 1; }
+  .row .detail { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 18px; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  #copyBox {
+    width: 100%; height: 140px; margin-top: 12px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-family: monospace;
+    font-size: 11px; display: none;
+  }
+</style>
+</head>
+<body>
+<h1>The Chain Room — Diagnostics</h1>
+<div class="sub">Self-check for the workshop &amp; client apps. Runs entirely on this device. Open this in the same browser/app where your data lives.</div>
+
+<div class="bar">
+  <button onclick="run()">Run all checks</button>
+  <button class="ghost" onclick="toggleCopy()">Show copyable report</button>
+  <button class="ghost" onclick="location.reload()">Reset</button>
+</div>
+
+<div class="summary" id="summary"></div>
+<div id="results"></div>
+<textarea id="copyBox" readonly></textarea>
+
+<div class="legend">
+  ✓ pass &nbsp; ✕ fail &nbsp; ! warning &nbsp; • info<br>
+  This tool reads your on-device data (localStorage) and verifies it's well-formed, recomputes billing to catch corruption, and checks the environment (storage, file picker, network, share). It never sends anything anywhere.
+</div>
+
+<script>
+// ---- Mirrors of the app's core pure functions (kept in sync with app.js) ----
+function fmtMoney(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return "0";
+  return v.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+function calcTotalCost(wireWeight, wireReturned, ratePerKg) {
+  const chargeable = Math.max(0, (Number(wireWeight) || 0) - (Number(wireReturned) || 0));
+  return (chargeable / 1000) * (Number(ratePerKg) || 0);
+}
+function fullItemCode(item, variant) {
+  if (!item) return "";
+  const base = (item.code || "").toUpperCase();
+  const size = variant && variant.size ? String(variant.size).replace(/[^a-zA-Z0-9]/g, "") : "";
+  return base + size;
+}
+function formatOrderId(o) {
+  const n = (o && o.orderNumber) || 0;
+  return "ORD-" + String(n).padStart(4, "0");
+}
+
+// ---- Check harness ----
+const groups = [];
+function group(name) { const g = { name, rows: [] }; groups.push(g); return g; }
+function add(g, status, label, detail) { g.rows.push({ status, label, detail: detail || "" }); }
+const pass = (g, l, d) => add(g, "pass", l, d);
+const fail = (g, l, d) => add(g, "fail", l, d);
+const warn = (g, l, d) => add(g, "warn", l, d);
+const info = (g, l, d) => add(g, "info", l, d);
+
+function readLS(key) {
+  try { const v = localStorage.getItem(key); return v == null ? null : JSON.parse(v); }
+  catch (e) { return undefined; } // undefined = corrupt JSON
+}
+
+function run() {
+  groups.length = 0;
+
+  // ===== 1. ENVIRONMENT =====
+  const env = group("Environment & capabilities");
+  // Which app?
+  const hasWorkshopKeys = localStorage.getItem("cw_orders") != null || localStorage.getItem("cw_owner_pin") != null;
+  const hasClientCode = localStorage.getItem("cw_my_code") != null;
+  info(env, "Detected app context", hasClientCode && !hasWorkshopKeys ? "Looks like the CLIENT app" : (hasWorkshopKeys ? "Looks like the WORKSHOP app (or shared data present)" : "No app data found yet on this device"));
+  info(env, "User agent", navigator.userAgent.slice(0, 90));
+  const isAndroidWV = /wv\)|; wv/.test(navigator.userAgent) || (/Android/.test(navigator.userAgent) && !/Chrome\/[.0-9]* Mobile/.test(navigator.userAgent));
+  info(env, "Running inside Android WebView (APK)?", isAndroidWV ? "Likely YES" : "Likely NO (browser/PWA)");
+
+  // localStorage
+  try {
+    const k = "__diag_test__"; localStorage.setItem(k, "1");
+    const ok = localStorage.getItem(k) === "1"; localStorage.removeItem(k);
+    ok ? pass(env, "localStorage read/write works") : fail(env, "localStorage not persisting", "Data won't save. In a browser, check you're not in private mode.");
+  } catch (e) { fail(env, "localStorage blocked", e.message + " — the app cannot save data here."); }
+
+  // Storage estimate
+  if (navigator.storage && navigator.storage.estimate) {
+    navigator.storage.estimate().then(est => {
+      const usedKB = Math.round((est.usage || 0) / 1024);
+      const quotaMB = Math.round((est.quota || 0) / (1024 * 1024));
+      // can't add async into the already-rendered group cleanly; log to console
+      console.log("Storage: ~" + usedKB + "KB used of ~" + quotaMB + "MB");
+    });
+    info(env, "Storage quota", "See console for usage estimate (storage rarely an issue here)");
+  }
+
+  // fetch (needed for sync)
+  info(env, "fetch() available", typeof fetch === "function" ? "Yes (sync possible)" : "No");
+  // Web Share (PDF/summary sharing)
+  info(env, "Web Share API (navigator.share)", typeof navigator.share === "function" ? "Yes — share sheet works" : "No — sharing falls back to file download");
+  // File input (import) — can only verify the element works, not the native picker
+  try {
+    const inp = document.createElement("input"); inp.type = "file";
+    inp.type === "file" ? pass(env, "File input element supported", "Import button can open a picker (in APK this needs the native onShowFileChooser handler)") : warn(env, "File input not fully supported");
+  } catch (e) { fail(env, "File input creation failed", e.message); }
+  // Android bridges
+  info(env, "AndroidDownload bridge", (typeof window.AndroidDownload !== "undefined") ? "Present (native file save active)" : "Absent (normal in browser/PWA)");
+  info(env, "AndroidNotify bridge", (typeof window.AndroidNotify !== "undefined") ? "Present (native notifications active)" : "Absent (normal in browser/PWA)");
+
+  // ===== 2. DATA INTEGRITY =====
+  const data = group("Data integrity");
+  const corruptKeys = [];
+  ["cw_clients", "cw_items", "cw_orders", "cw_client_rates", "cw_order_templates", "cw_audit_log"].forEach(key => {
+    if (localStorage.getItem(key) == null) return;
+    const v = readLS(key);
+    if (v === undefined) { corruptKeys.push(key); fail(data, "Corrupt JSON in " + key, "This key won't load — restore from a backup."); }
+  });
+  if (corruptKeys.length === 0) pass(data, "All stored JSON parses cleanly");
+
+  const clients = readLS("cw_clients") || [];
+  const items = readLS("cw_items") || [];
+  const orders = readLS("cw_orders") || [];
+  const rates = readLS("cw_client_rates") || [];
+  const seq = Number(localStorage.getItem("cw_order_seq")) || 0;
+
+  if (Array.isArray(clients)) pass(data, "Clients list is an array", clients.length + " client(s)"); else fail(data, "Clients is not an array");
+  if (Array.isArray(items)) pass(data, "Items list is an array", items.length + " item(s)"); else fail(data, "Items is not an array");
+  if (Array.isArray(orders)) pass(data, "Orders list is an array", orders.length + " order(s)"); else fail(data, "Orders is not an array");
+
+  // Client access codes unique
+  if (clients.length) {
+    const codes = clients.map(c => c && c.code).filter(Boolean);
+    const dupes = codes.filter((c, i) => codes.indexOf(c) !== i);
+    dupes.length ? fail(data, "Duplicate client access codes", dupes.join(", ") + " — two clients could log into the same data") : pass(data, "All client access codes unique");
+    const noCode = clients.filter(c => c && !c.code).length;
+    noCode ? warn(data, noCode + " client(s) missing an access code", "They can't log into the client app") : pass(data, "Every client has an access code");
+  }
+
+  // Order referential integrity + required fields + billing recompute
+  if (orders.length) {
+    const cids = new Set(clients.map(c => c && c.id));
+    const iids = new Set(items.map(i => i && i.id));
+    let orphanClient = 0, orphanItem = 0, missingNum = 0, billingMismatch = 0, nanCost = 0, nullOrders = 0;
+    const numbers = [];
+    orders.forEach(o => {
+      if (!o) { nullOrders++; return; }
+      if (!cids.has(o.clientId)) orphanClient++;
+      if (o.itemId && !iids.has(o.itemId)) orphanItem++;
+      if (!o.orderNumber) missingNum++; else numbers.push(o.orderNumber);
+      const cost = Number(o.totalCost);
+      if (!isFinite(cost)) { nanCost++; }
+      else {
+        const recomputed = calcTotalCost(o.wireWeight, o.wireReturned, o.ratePerKg);
+        // allow 1 paisa rounding tolerance
+        if (Math.abs(recomputed - cost) > 0.011) billingMismatch++;
+      }
+    });
+    nullOrders ? fail(data, nullOrders + " null/empty order record(s)", "Could come from corrupt sync data") : pass(data, "No null order records");
+    orphanClient ? warn(data, orphanClient + " order(s) reference a missing client", "Their client was deleted — name may show stale") : pass(data, "All orders link to an existing client");
+    orphanItem ? warn(data, orphanItem + " order(s) reference a missing item") : pass(data, "All orders link to an existing item");
+    missingNum ? fail(data, missingNum + " order(s) missing an order number") : pass(data, "Every order has an order number");
+    nanCost ? fail(data, nanCost + " order(s) have a non-numeric total", "Would show oddly; re-save the order to fix") : pass(data, "All order totals are valid numbers");
+    billingMismatch ? warn(data, billingMismatch + " order(s) where stored total ≠ recomputed", "Could be an intentional manual override, or a rate change after the order") : pass(data, "Stored totals match the billing formula", "(wire − returned) ÷ 1000 × rate");
+
+    // Order number uniqueness + sequence
+    const dupeNums = numbers.filter((n, i) => numbers.indexOf(n) !== i);
+    dupeNums.length ? fail(data, "Duplicate order numbers", [...new Set(dupeNums)].join(", ")) : pass(data, "All order numbers unique");
+    const maxNum = numbers.length ? Math.max(...numbers) : 0;
+    seq >= maxNum ? pass(data, "Order sequence counter is consistent", "next = ORD-" + String(seq + 1).padStart(4, "0")) : fail(data, "Sequence counter (" + seq + ") is below the highest order (" + maxNum + ")", "A new order could reuse an existing number");
+  }
+
+  // Rates reference real clients/items
+  if (rates.length) {
+    const cids = new Set(clients.map(c => c && c.id));
+    const orphanRates = rates.filter(r => r && !cids.has(r.clientId)).length;
+    orphanRates ? warn(data, orphanRates + " saved rate(s) for a deleted client") : pass(data, "All saved rates link to a real client");
+  }
+
+  // ===== 3. LOGIC SELF-TEST (recompute on known inputs) =====
+  const logic = group("Calculation self-test");
+  const t = (cond, label, detail) => cond ? pass(logic, label, detail) : fail(logic, label, detail);
+  t(calcTotalCost(1000, 0, 500) === 500, "Billing: 1000g @ ₹500/kg = ₹500");
+  t(calcTotalCost(1000, 200, 500) === 400, "Billing: returned wire reduces the bill");
+  t(calcTotalCost(500, 900, 500) === 0, "Billing: returned > wire never goes negative");
+  t(calcTotalCost("abc", "", "xyz") === 0, "Billing: junk input → ₹0 (no NaN)");
+  t(fullItemCode({ code: "ras" }, { size: "20" }) === "RAS20", "Item code: ras + 20 → RAS20");
+  t(fullItemCode(null, null) === "", "Item code: null inputs → empty (no crash)");
+  t(formatOrderId({ orderNumber: 1 }) === "ORD-0001", "Order ID: 1 → ORD-0001");
+  t(formatOrderId(null) === "ORD-0000", "Order ID: null → ORD-0000 (hardened)");
+  t(fmtMoney(NaN) === "0", "Money format: NaN → 0");
+  t(fmtMoney(1234.5) === "1,234.5", "Money format: 1234.5 → 1,234.5 (Indian grouping)");
+
+  // ===== 4. SYNC CONFIG =====
+  const sync = group("Sync configuration");
+  // We can't see BACKEND_URL from here, but we can check the write queue + last sync markers.
+  const queue = readLS("cw_sync_queue");
+  if (queue === undefined) fail(sync, "Sync queue corrupt");
+  else if (Array.isArray(queue) && queue.length > 0) warn(sync, queue.length + " write(s) waiting to sync", "These will retry when the server is reachable. Persisting? Check your Apps Script URL / internet.");
+  else pass(sync, "No stuck writes in the sync queue");
+  info(sync, "How to verify sync end-to-end", "Add a test order, then open the OTHER app/device and confirm it appears within ~7s.");
+
+  // ===== 5. FEATURE PRESENCE (data-driven hints) =====
+  const feat = group("Feature data check");
+  const theme = localStorage.getItem("cw_theme");
+  info(feat, "Theme", theme === "light" ? "Light mode active" : "Dark mode (default)");
+  const audit = readLS("cw_audit_log");
+  if (Array.isArray(audit)) info(feat, "Activity log", audit.length + " entries recorded on this device");
+  const tmpl = readLS("cw_order_templates");
+  if (Array.isArray(tmpl)) info(feat, "Order templates", tmpl.length + " saved");
+  const ownerPin = localStorage.getItem("cw_owner_pin");
+  const viewerPin = localStorage.getItem("cw_viewer_pin");
+  info(feat, "Owner PIN set", ownerPin ? "Yes" : "No (app opens in full owner mode)");
+  info(feat, "Viewer (read-only) PIN set", viewerPin ? "Yes" : "No");
+  // Multi-phone presence
+  const multiPhone = clients.filter(c => c && Array.isArray(c.phones) && c.phones.length > 1).length;
+  if (clients.length) info(feat, "Clients with multiple phone numbers", String(multiPhone));
+  // Slide-to-verify demoable
+  const demoable = orders.filter(o => o && o.workshopDone && !o.clientConfirmed && !o.cancelled).length;
+  if (orders.length) info(feat, "Orders ready to slide-to-verify (done + unconfirmed)", String(demoable));
+
+  // Tombstones (deletion safety)
+  const tombs = readLS("cw_tombstones");
+  if (tombs === undefined) warn(feat, "Tombstone record is corrupt");
+  else if (tombs && typeof tombs === "object") {
+    const total = ["clients", "items", "orders"].reduce((n, k) => n + (tombs[k] ? Object.keys(tombs[k]).length : 0), 0);
+    info(feat, "Active deletion tombstones", total + " (these auto-expire; >0 just means something was deleted recently)");
+  } else {
+    pass(feat, "No pending deletion tombstones");
+  }
+
+  // Catalogue (items with timestamps + unread tracking)
+  if (items.length) {
+    const withTs = items.filter(it => it && (it.addedAt || it.updatedAt)).length;
+    info(feat, "Catalogue items with date stamps", withTs + " of " + items.length + " (older items may lack them; that's fine)");
+    const seen = Number(localStorage.getItem("cw_catalog_seen")) || 0;
+    if (seen) info(feat, "Catalogue last viewed", new Date(seen).toLocaleString());
+  }
+
+  // Client access-code PIN (client app only)
+  if (hasClientCode) {
+    const pin = localStorage.getItem("cw_client_view_pin");
+    info(feat, "Access-code view PIN set", pin ? "Yes (your code is protected)" : "No — set one under 'My access code' to protect it");
+  }
+  info(feat, "Background sync interval", "Every 2 minutes while the app is open");
+
+  // Scrap deduction
+  if (orders.length) {
+    const deductOrders = orders.filter((o) => o && o.deductScrap).length;
+    info(feat, "Orders set to deduct scrap", deductOrders + " of " + orders.length);
+    const doneNoScrap = orders.filter((o) => o && o.workshopDone && (o.scrapWeight === "" || o.scrapWeight == null)).length;
+    if (doneNoScrap > 0) info(feat, "Done orders with no scrap recorded", String(doneNoScrap) + " (older orders before this feature)");
+  }
+  if (clients.length) {
+    const defOn = clients.filter((c) => c && c.deductScrapDefault).length;
+    info(feat, "Clients defaulting to deduct scrap", defOn + " of " + clients.length);
+  }
+
+  // Drive item photos
+  const photoMap = readLS("cw_drive_photos");
+  if (photoMap && typeof photoMap === "object" && !Array.isArray(photoMap)) {
+    const n = Object.keys(photoMap).length;
+    if (n > 0) {
+      info(feat, "Drive item photos", n + " photo link(s) cached from your Drive folder");
+      // How many catalogue items have a matching Drive photo by code?
+      if (items.length) {
+        const codes = new Set(Object.keys(photoMap).map((k) => String(k).toUpperCase()));
+        const matched = items.filter((it) => it && it.code && codes.has(String(it.code).toUpperCase())).length;
+        const uploaded = items.filter((it) => it && it.photo).length;
+        info(feat, "Items with a Drive photo (by code)", matched + " of " + items.length);
+        info(feat, "Items with an uploaded photo (overrides Drive)", String(uploaded));
+        const noneOf = items.filter((it) => it && !it.photo && !(it.code && codes.has(String(it.code).toUpperCase()))).length;
+        if (noneOf > 0) warn(feat, noneOf + " item(s) have no photo — add a file named by item code to your Drive folder");
+      }
+    } else {
+      info(feat, "Drive item photos", "None cached yet (folder not configured, or not synced)");
+    }
+  }
+
+  render();
+}
+
+function render() {
+  let nPass = 0, nFail = 0, nWarn = 0, nInfo = 0;
+  groups.forEach(g => g.rows.forEach(r => {
+    if (r.status === "pass") nPass++; else if (r.status === "fail") nFail++;
+    else if (r.status === "warn") nWarn++; else nInfo++;
+  }));
+
+  const sum = document.getElementById("summary");
+  sum.innerHTML = "";
+  const stats = [
+    { l: "Passed", n: nPass, c: "pass" },
+    { l: "Failed", n: nFail, c: "fail" },
+    { l: "Warnings", n: nWarn, c: "warn" },
+    { l: "Info", n: nInfo, c: "" },
+  ];
+  stats.forEach(s => {
+    const d = document.createElement("div");
+    d.className = "stat " + s.c;
+    d.innerHTML = '<div class="n">' + s.n + '</div><div class="l">' + s.l + '</div>';
+    sum.appendChild(d);
+  });
+
+  const res = document.getElementById("results");
+  res.innerHTML = "";
+  const icons = { pass: "✓", fail: "✕", warn: "!", info: "•" };
+  groups.forEach(g => {
+    const gf = g.rows.filter(r => r.status === "fail").length;
+    const gw = g.rows.filter(r => r.status === "warn").length;
+    const el = document.createElement("div");
+    el.className = "group";
+    let rowsHtml = "";
+    g.rows.forEach(r => {
+      rowsHtml += '<div class="row ' + r.status + '"><div class="ic">' + icons[r.status] + '</div>' +
+        '<div class="body">' + esc(r.label) + (r.detail ? '<div class="detail">' + esc(r.detail) + '</div>' : '') + '</div></div>';
+    });
+    const badge = gf ? (gf + " failed") : (gw ? (gw + " warning" + (gw > 1 ? "s" : "")) : "all clear");
+    el.innerHTML = '<div class="head"><span>' + esc(g.name) + '</span><span class="count">' + badge + '</span></div>' + rowsHtml;
+    res.appendChild(el);
+  });
+
+  buildCopy(nPass, nFail, nWarn);
+}
+
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+function buildCopy(p, f, w) {
+  let txt = "THE CHAIN ROOM — DIAGNOSTICS\n" + new Date().toString() + "\n";
+  txt += "Passed " + p + " / Failed " + f + " / Warnings " + w + "\n";
+  txt += "UA: " + navigator.userAgent + "\n\n";
+  groups.forEach(g => {
+    txt += "== " + g.name + " ==\n";
+    g.rows.forEach(r => { txt += ({ pass: "[OK]  ", fail: "[FAIL]", warn: "[WARN]", info: "[info]" }[r.status]) + " " + r.label + (r.detail ? " — " + r.detail : "") + "\n"; });
+    txt += "\n";
+  });
+  document.getElementById("copyBox").value = txt;
+}
+function toggleCopy() {
+  const b = document.getElementById("copyBox");
+  b.style.display = b.style.display === "block" ? "none" : "block";
+  if (b.style.display === "block") { b.focus(); b.select(); }
+}
+
+// Auto-run on open
+run();
+</script>
+</body>
+</html>
