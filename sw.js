@@ -1,4 +1,4 @@
-const CACHE_NAME = "tcr-static-v3";
+const CACHE_NAME = "tcr-static-v4";
 
 const STATIC_FILES = [
   "./",
