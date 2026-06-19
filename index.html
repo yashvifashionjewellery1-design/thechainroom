@@ -4,30 +4,89 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <meta name="theme-color" content="#1b1815" />
+
 <title>The Chain Room — My Orders</title>
-<link rel="manifest" href="manifest.json" />
+
+<link rel="manifest" href="manifest.json?v=3" />
 <link rel="icon" href="icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="icon.svg" />
+
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+
 <style>
-  html, body { margin: 0; padding: 0; background: #1b1815; }
-  #root { min-height: 100vh; }
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #1b1815;
+}
+
+#root {
+    min-height: 100vh;
+}
 </style>
 </head>
+
 <body>
+
 <div id="root"></div>
 
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-<!-- Precompiled from app.jsx (no in-browser Babel needed). -->
-<script src="app.js"></script>
+<!-- Main App -->
+<script src="app.js?v=3"></script>
 
 <script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+(function () {
+
+    if (!("serviceWorker" in navigator)) {
+        return;
+    }
+
+    window.addEventListener("load", async function () {
+
+        try {
+
+            const registration =
+                await navigator.serviceWorker.register(
+                    "./sw.js?v=3",
+                    { updateViaCache: "none" }
+                );
+
+            console.log("SW Registered");
+
+            try {
+                await registration.update();
+            } catch (e) {
+                console.log("SW Update Check Failed");
+            }
+
+            navigator.serviceWorker.addEventListener(
+                "controllerchange",
+                function () {
+
+                    if (window.__swReloaded) {
+                        return;
+                    }
+
+                    window.__swReloaded = true;
+
+                    window.location.reload();
+                }
+            );
+
+        } catch (err) {
+
+            console.error("Service Worker Error", err);
+
+        }
+
     });
-  }
+
+})();
 </script>
+
 </body>
 </html>
