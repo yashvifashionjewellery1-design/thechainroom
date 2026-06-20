@@ -117,6 +117,11 @@ const Lock = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.c
 }), /*#__PURE__*/React.createElement("path", {
   d: "M7 11V7a5 5 0 0 1 10 0v4"
 }));
+const Megaphone = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "m3 11 18-5v12L3 14v-3z"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M11.6 16.8a3 3 0 1 1-5.8-1.6"
+}));
 const Eye = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
   d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
 }), /*#__PURE__*/React.createElement("circle", {
@@ -179,6 +184,25 @@ const Sun = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.cr
 }));
 const Moon = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
   d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
+}));
+const Bell = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M13.73 21a2 2 0 0 1-3.46 0"
+}));
+const BellOff = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "M13.73 21a2 2 0 0 1-3.46 0"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M18.63 13A17.89 17.89 0 0 1 18 8"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M18 8a6 6 0 0 0-9.33-5"
+}), /*#__PURE__*/React.createElement("line", {
+  x1: "1",
+  y1: "1",
+  x2: "23",
+  y2: "23"
 }));
 const RefreshCw = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
   d: "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
@@ -578,6 +602,32 @@ const STYLES = `
 }
 .cw-ledger-expanded {
   margin-top: 10px;
+}
+.cw-marquee {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: linear-gradient(90deg, #3a2f12, #5a4718);
+  border-bottom: 1px solid var(--gold);
+  overflow: hidden;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.cw-marquee-track {
+  display: inline-block;
+  white-space: nowrap;
+  animation: cw-marquee-kf 18s linear infinite;
+  color: #f3e6c4;
+  font-size: 13px;
+  font-weight: 600;
+}
+.cw-marquee:hover .cw-marquee-track { animation-play-state: paused; }
+@keyframes cw-marquee-kf {
+  from { transform: translateX(100%); }
+  to { transform: translateX(-100%); }
 }
 .cw-lightbox {
   position: fixed;
@@ -1080,12 +1130,42 @@ function formatOrderId(o) {
 
 // Shows a native Android notification via the AndroidNotify JS bridge
 // (added in MainActivity.kt). No-op on other platforms / if not available.
+// Plays a short two-tone chime for notifications using the Web Audio API (no
+// audio file needed). Respects the user's mute setting (cw_notify_sound).
+let _audioCtx = null;
+function playNotificationSound() {
+  try {
+    if (localStorage.getItem("cw_notify_sound") === "off") return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!_audioCtx) _audioCtx = new AC();
+    const ctx = _audioCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    const now = ctx.currentTime;
+    // Two quick notes (a pleasant "ding-dong").
+    [[880, 0], [1175, 0.13]].forEach(([freq, offset]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, now + offset);
+      gain.gain.linearRampToValueAtTime(0.25, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.25);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.28);
+    });
+  } catch {
+    // best-effort only
+  }
+}
 function notifyAndroid(title, body) {
   try {
     if (window.AndroidNotify?.notify) window.AndroidNotify.notify(title, body);
   } catch {
     // best-effort only
   }
+  playNotificationSound();
 }
 
 // Looks up a client's negotiated rate for a specific item+wire size, if any.
@@ -1124,7 +1204,7 @@ function fullItemCode(item, variant) {
 // ---- Sync backend (Google Apps Script Web App over your Drive) ----
 // After deploying Code.gs as a Web App, paste the URL here. Both the
 // workshop app and the client app MUST use the SAME URL so they share data.
-const BACKEND_URL = "https://script.google.com/macros/s/AKfycbwdV73BQf3OcbyylDj4bBDWo_pngbz3cKsSeZ1vpz7tVA6SzQKM1zs_Hjq0oGmp1nulAg/exec";
+const BACKEND_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
 const SYNC_ENABLED = !BACKEND_URL.startsWith("PASTE_");
 const SYNC_QUEUE_KEY = "cw_sync_queue";
 function readLocal(key) {
@@ -1256,6 +1336,15 @@ function resolveItemPhoto(item, photoMap) {
   if (code && photoMap && photoMap[code]) return photoMap[code];
   return "";
 }
+
+// Slips/proofs are stored as Drive URLs (or a "pending:" token while still on
+// the workshop device, in which case the client can't show it yet). Returns a
+// displayable URL or "" .
+function displayPhoto(token) {
+  if (!token || typeof token !== "string") return "";
+  if (token.startsWith("pending:")) return ""; // not yet uploaded; not on this device
+  return token;
+}
 async function saveKey(key, value) {
   writeLocal(key, value);
   if (!SYNC_ENABLED) return;
@@ -1338,9 +1427,29 @@ function sanitizeFilename(name) {
 
 // Shares a jsPDF document via the Web Share sheet (so the client can pick
 // WhatsApp etc. directly), falling back to a plain download.
+function savePdfToDevice(doc, filename) {
+  try {
+    if (typeof window.AndroidDownload !== "undefined" && window.AndroidDownload.saveDataUrl) {
+      const dataUrl = doc.output("datauristring");
+      window.AndroidDownload.saveDataUrl(dataUrl, filename);
+      return true;
+    }
+  } catch {
+    // fall through to browser download
+  }
+  doc.save(filename);
+  return true;
+}
 async function sharePdf(doc, filename, shareTitle, shareText) {
-  const blob = doc.output("blob");
-  if (navigator.canShare && navigator.share) {
+  const canShare = !!(navigator.canShare && navigator.share);
+  if (canShare) {
+    const choice = window.confirm(`"${filename}"\n\nOK = Share (WhatsApp, email, Drive…)\nCancel = Save to this device`);
+    if (!choice) {
+      savePdfToDevice(doc, filename);
+      alert(`"${filename}" saved to your device (check Downloads/Files).`);
+      return;
+    }
+    const blob = doc.output("blob");
     try {
       const file = new File([blob], filename, {
         type: "application/pdf"
@@ -1356,11 +1465,11 @@ async function sharePdf(doc, filename, shareTitle, shareText) {
         return;
       }
     } catch {
-      // fall through to download
+      // user cancelled or share failed — fall through to save
     }
   }
-  doc.save(filename);
-  alert(`"${filename}" downloaded — you can share it from your Files/Downloads via WhatsApp or any app.`);
+  savePdfToDevice(doc, filename);
+  alert(`"${filename}" saved to your device — you can share it from Downloads/Files via WhatsApp or any app.`);
 }
 function YieldRing({
   wireIn,
@@ -1448,6 +1557,7 @@ function App() {
   const [clients, setClients] = useState([]);
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
+  const [broadcasts, setBroadcasts] = useState([]);
   const [photoMap, setPhotoMap] = useState(() => readPhotoMap());
   const [clientRates, setClientRates] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("cw_theme") === "light" ? "light" : "dark");
@@ -1465,6 +1575,9 @@ function App() {
   const refreshFromServer = useCallback(async () => {
     const [c, o, i, cr, photos] = await Promise.all([loadKey("cw_clients"), loadKey("cw_orders"), loadKey("cw_items"), loadKey("cw_client_rates"), loadDrivePhotos()]);
     if (photos && typeof photos === "object") setPhotoMap(photos);
+    loadKey("cw_broadcasts").then(b => {
+      if (Array.isArray(b)) setBroadcasts(b);
+    });
 
     // Detect status changes / new workshop feedback since the last sync and
     // surface it as a native notification — but ONLY for the order(s) belonging
@@ -1520,6 +1633,7 @@ function App() {
     setOrders(readLocal("cw_orders"));
     setItems(readLocal("cw_items"));
     setClientRates(readLocal("cw_client_rates"));
+    setBroadcasts(readLocal("cw_broadcasts") || []);
     setLoading(false);
     if (!SYNC_ENABLED) return () => {
       cancelled = true;
@@ -1536,7 +1650,7 @@ function App() {
     // when nothing is queued.
     const interval = setInterval(() => {
       if (document.visibilityState === "visible" && !cancelled) syncNow();
-    }, 120000);
+    }, 180000);
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
@@ -1592,6 +1706,7 @@ function App() {
     orders: orders,
     items: items,
     photoMap: photoMap,
+    broadcasts: broadcasts,
     clientRates: clientRates,
     verifyOrder: verifyOrder,
     saveComment: saveComment,
@@ -1602,7 +1717,7 @@ function App() {
 }
 
 /* ---------------- ABOUT / LEGAL ---------------- */
-const APP_VERSION = "1.0";
+const APP_VERSION = "4.0";
 const PRIVACY_TEXT = `Your order data is recorded by the workshop and stored locally on their device. If they've set up sync, it's also stored in their own private Google Sheet — not on any server run by the developer.
 
 This app does not use analytics, advertising, or tracking of any kind, and does not share your data with any third party.`;
@@ -2470,11 +2585,73 @@ function AccessCodeReveal({
     }
   }, msg));
 }
+
+// Scrolling marquee of active broadcasts targeted at this client (or all).
+// Clients can dismiss a message; dismissed IDs are remembered on the device.
+function BroadcastMarquee({
+  broadcasts,
+  clientId
+}) {
+  const DISMISS_KEY = "cw_dismissed_broadcasts";
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+  const now = Date.now();
+  const active = (Array.isArray(broadcasts) ? broadcasts : []).filter(b => {
+    if (!b || !b.text) return false;
+    if (b.target !== "all" && b.target !== clientId) return false;
+    if (b.expiry && new Date(b.expiry).getTime() < now) return false;
+    if (dismissed.has(b.id)) return false;
+    return true;
+  });
+  if (active.length === 0) return null;
+  const dismissAll = () => {
+    const next = new Set(dismissed);
+    active.forEach(b => next.add(b.id));
+    setDismissed(next);
+    try {
+      localStorage.setItem(DISMISS_KEY, JSON.stringify([...next]));
+    } catch (e) {/* ignore */}
+  };
+
+  // Join multiple messages with a separator so they cycle in one track.
+  const combined = active.map(b => b.text).join("     ★     ");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cw-marquee"
+  }, /*#__PURE__*/React.createElement(Megaphone, {
+    size: 14,
+    style: {
+      color: "var(--gold)",
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflow: "hidden",
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "cw-marquee-track"
+  }, combined, "     ★     ", combined)), /*#__PURE__*/React.createElement("div", {
+    className: "cw-icon-btn",
+    style: {
+      flexShrink: 0,
+      width: 22,
+      height: 22
+    },
+    onClick: dismissAll,
+    title: "Dismiss"
+  }, "✕"));
+}
 function ClientPortal({
   clients,
   orders,
   items,
   photoMap,
+  broadcasts,
   clientRates,
   verifyOrder,
   saveComment,
@@ -2489,6 +2666,7 @@ function ClientPortal({
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
   const [lightboxSrc, setLightboxSrc] = useState(null);
+  const [soundOn, setSoundOn] = useState(() => localStorage.getItem("cw_notify_sound") !== "off");
   const [clientTab, setClientTab] = useState("orders");
   // Show the tutorial automatically the first time a client uses the app on
   // this device (then never again unless they reopen it from Help).
@@ -2730,7 +2908,7 @@ function ClientPortal({
     src: "icon.svg",
     alt: "",
     className: "cw-logo-mark"
-  }), /*#__PURE__*/React.createElement("div", null, "TCR", /*#__PURE__*/React.createElement("small", null, "My Orders"))), /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement("div", null, "TCR", /*#__PURE__*/React.createElement("small", null, "My Orders · v", APP_VERSION))), /*#__PURE__*/React.createElement("button", {
     className: "cw-btn cw-btn-ghost cw-btn-sm",
     onClick: () => {
       setActiveClient(null);
@@ -2749,7 +2927,23 @@ function ClientPortal({
     size: 13
   }) : /*#__PURE__*/React.createElement(Sun, {
     size: 13
-  }), " ", theme === "light" ? "Dark" : "Light"), SYNC_ENABLED && /*#__PURE__*/React.createElement("button", {
+  }), " ", theme === "light" ? "Dark" : "Light"), /*#__PURE__*/React.createElement("button", {
+    className: "cw-btn cw-btn-ghost cw-btn-sm",
+    style: {
+      marginLeft: 8
+    },
+    onClick: () => {
+      const next = !soundOn;
+      setSoundOn(next);
+      localStorage.setItem("cw_notify_sound", next ? "on" : "off");
+      if (next) playNotificationSound(); // preview when turning on
+    },
+    title: soundOn ? "Notification sound on" : "Notification sound off"
+  }, soundOn ? /*#__PURE__*/React.createElement(Bell, {
+    size: 13
+  }) : /*#__PURE__*/React.createElement(BellOff, {
+    size: 13
+  }), " ", soundOn ? "Sound on" : "Sound off"), SYNC_ENABLED && /*#__PURE__*/React.createElement("button", {
     className: "cw-btn cw-btn-ghost cw-btn-sm",
     style: {
       marginLeft: 8
@@ -2776,6 +2970,9 @@ function ClientPortal({
     }
   }, syncMsg), showFirstRunTutorial && /*#__PURE__*/React.createElement(TutorialWalkthrough, {
     onClose: () => setShowFirstRunTutorial(false)
+  }), /*#__PURE__*/React.createElement(BroadcastMarquee, {
+    broadcasts: broadcasts,
+    clientId: activeClient.id
   }), /*#__PURE__*/React.createElement("div", {
     className: "cw-section-title"
   }, "Welcome, ", activeClient.name), /*#__PURE__*/React.createElement("div", {
@@ -2985,7 +3182,7 @@ function ClientPortal({
       made: made,
       scrap: o.scrapWeight,
       returned: o.wireReturned
-    }), (o.clientSlip || o.workshopSlip) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("hr", {
+    }), (displayPhoto(o.clientSlip) || displayPhoto(o.workshopSlip)) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("hr", {
       className: "cw-divider"
     }), /*#__PURE__*/React.createElement("div", {
       className: "cw-card-sub",
@@ -2999,14 +3196,14 @@ function ClientPortal({
         gap: 12,
         flexWrap: "wrap"
       }
-    }, o.clientSlip && /*#__PURE__*/React.createElement("div", {
+    }, displayPhoto(o.clientSlip) && /*#__PURE__*/React.createElement("div", {
       style: {
         textAlign: "center"
       }
     }, /*#__PURE__*/React.createElement("img", {
-      src: o.clientSlip,
+      src: displayPhoto(o.clientSlip),
       alt: "",
-      onClick: () => setLightboxSrc(o.clientSlip),
+      onClick: () => setLightboxSrc(displayPhoto(o.clientSlip)),
       style: {
         width: 88,
         height: 88,
@@ -3021,14 +3218,14 @@ function ClientPortal({
         fontSize: 11,
         marginTop: 3
       }
-    }, "Your slip")), o.workshopSlip && /*#__PURE__*/React.createElement("div", {
+    }, "Your slip")), displayPhoto(o.workshopSlip) && /*#__PURE__*/React.createElement("div", {
       style: {
         textAlign: "center"
       }
     }, /*#__PURE__*/React.createElement("img", {
-      src: o.workshopSlip,
+      src: displayPhoto(o.workshopSlip),
       alt: "",
-      onClick: () => setLightboxSrc(o.workshopSlip),
+      onClick: () => setLightboxSrc(displayPhoto(o.workshopSlip)),
       style: {
         width: 88,
         height: 88,
@@ -3043,7 +3240,34 @@ function ClientPortal({
         fontSize: 11,
         marginTop: 3
       }
-    }, "Workshop slip")))), !o.cancelled && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("hr", {
+    }, "Workshop slip")))), Array.isArray(o.proofPhotos) && o.proofPhotos.filter(p => displayPhoto(p)).length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("hr", {
+      className: "cw-divider"
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "cw-card-sub",
+      style: {
+        fontWeight: 600,
+        marginBottom: 6
+      }
+    }, "Completion proofs"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 8,
+        flexWrap: "wrap"
+      }
+    }, o.proofPhotos.map((p, idx) => displayPhoto(p) ? /*#__PURE__*/React.createElement("img", {
+      key: idx,
+      src: displayPhoto(p),
+      alt: "",
+      onClick: () => setLightboxSrc(displayPhoto(p)),
+      style: {
+        width: 72,
+        height: 72,
+        borderRadius: 8,
+        objectFit: "cover",
+        border: "1px solid var(--border)",
+        cursor: "zoom-in"
+      }
+    }) : null))), !o.cancelled && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("hr", {
       className: "cw-divider"
     }), /*#__PURE__*/React.createElement("div", {
       style: {
