@@ -1,89 +1,75 @@
-const CACHE_NAME = "tcr-static-v4";
+// The Chain Room — service worker (reliability-focused)
+// Versioned cache: bump SW_VERSION on every release so browsers fetch fresh
+// files instead of serving stale cached assets.
+const SW_VERSION = "4";
+const CACHE = "tcr-cache-v" + SW_VERSION;
 
-const STATIC_FILES = [
+const ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
   "./icon.svg",
-  "./logo-full.svg"
+  "./logo-full.svg",
+  "https://unpkg.com/react@18/umd/react.production.min.js",
+  "https://unpkg.com/react-dom@18/umd/react-dom.production.min.js",
+  "https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js",
 ];
 
-self.addEventListener("install", (event) => {
+self.addEventListener("install", (e) => {
   self.skipWaiting();
-
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(STATIC_FILES))
+  e.waitUntil(
+    caches.open(CACHE).then((cache) =>
+      Promise.all(ASSETS.map((url) => cache.add(url).catch(() => {})))
+    )
   );
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    Promise.all([
-      clients.claim(),
-      caches.keys().then(keys =>
-        Promise.all(
-          keys
-            .filter(key => key !== CACHE_NAME)
-            .map(key => caches.delete(key))
-        )
-      )
-    ])
+self.addEventListener("activate", (e) => {
+  e.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  const url = new URL(req.url);
+function isApiRequest(url) {
+  return url.includes("script.google.com") || url.includes("script.googleusercontent.com");
+}
+function isHtmlOrAppJs(url, request) {
+  if (request.mode === "navigate") return true;
+  return /\/app\.js(\?|$)/.test(url) || /\/index\.html(\?|$)/.test(url) || url.endsWith("/");
+}
 
-  // Never cache Apps Script API
-  if (
-    url.hostname.includes("script.google.com") ||
-    url.hostname.includes("script.googleusercontent.com")
-  ) {
-    event.respondWith(
-      fetch(req, {
-        cache: "no-store"
-      })
-    );
+self.addEventListener("fetch", (e) => {
+  const url = e.request.url;
+
+  if (isApiRequest(url)) {
+    e.respondWith(fetch(e.request));
     return;
   }
 
-  // Always get latest JS/HTML
-  if (
-    req.destination === "document" ||
-    url.pathname.endsWith(".html") ||
-    url.pathname.endsWith(".js")
-  ) {
-    event.respondWith(
-      fetch(req)
-        .then(response => {
-          const clone = response.clone();
-
-          caches.open(CACHE_NAME)
-            .then(cache => cache.put(req, clone));
-
-          return response;
+  if (isHtmlOrAppJs(url, e.request)) {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((cache) => cache.put(e.request, copy)).catch(() => {});
+          return res;
         })
-        .catch(() => caches.match(req))
+        .catch(() => caches.match(e.request).then((c) => c || caches.match("./index.html")))
     );
     return;
   }
 
-  // Cache-first for images/icons/fonts
-  event.respondWith(
-    caches.match(req).then(cached => {
-      if (cached) return cached;
-
-      return fetch(req)
-        .then(response => {
-          const clone = response.clone();
-
-          caches.open(CACHE_NAME)
-            .then(cache => cache.put(req, clone));
-
-          return response;
-        });
-    })
+  e.respondWith(
+    caches.match(e.request).then((cached) => cached || fetch(e.request).then((res) => {
+      const copy = res.clone();
+      caches.open(CACHE).then((cache) => cache.put(e.request, copy)).catch(() => {});
+      return res;
+    }).catch(() => cached))
   );
+});
+
+self.addEventListener("message", (e) => {
+  if (e.data === "SKIP_WAITING") self.skipWaiting();
 });
