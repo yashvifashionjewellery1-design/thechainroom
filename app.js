@@ -1204,8 +1204,7 @@ function fullItemCode(item, variant) {
 // ---- Sync backend (Google Apps Script Web App over your Drive) ----
 // After deploying Code.gs as a Web App, paste the URL here. Both the
 // workshop app and the client app MUST use the SAME URL so they share data.
-const BACKEND_URL = "https://script.google.com/macros/s/AKfycbwdV73BQf3OcbyylDj4bBDWo_pngbz3cKsSeZ1vpz7tVA6SzQKM1zs_Hjq0oGmp1nulAg/exec
-";
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbwdV73BQf3OcbyylDj4bBDWo_pngbz3cKsSeZ1vpz7tVA6SzQKM1zs_Hjq0oGmp1nulAg/exec";
 const SYNC_ENABLED = !BACKEND_URL.startsWith("PASTE_");
 const SYNC_QUEUE_KEY = "cw_sync_queue";
 function readLocal(key) {
