@@ -55,7 +55,7 @@ const SHEET_NAME = "data";
  *
  * Leave it blank ("") to disable this feature entirely.
  */
-const PHOTO_FOLDER_ID = "";
+const PHOTO_FOLDER_ID = "1K58lMURKrKJ4ImApn-BHXvkBCKWEStaf";
 
 // Run this ONCE from the Apps Script editor to grant Drive permission.
 // HOW: In the editor, pick "authorizeDrive" from the function dropdown (top
@@ -64,13 +64,16 @@ const PHOTO_FOLDER_ID = "";
 // so Google never asked for Drive access. After running it once and approving,
 // re-deploy a New version and Drive photos will work.
 function authorizeDrive() {
-  // Touching DriveApp forces Apps Script to request the Drive scope.
+  // Touching DriveApp with a write op forces Apps Script to request the full
+  // Drive scope (needed for uploading order photos).
   try {
     if (PHOTO_FOLDER_ID) {
       const folder = DriveApp.getFolderById(PHOTO_FOLDER_ID);
-      Logger.log("OK — can access folder: " + folder.getName());
+      // Create + trash a tiny test file to confirm WRITE access.
+      const test = folder.createFile(Utilities.newBlob("ok", "text/plain", "tcr_perm_test.txt"));
+      test.setTrashed(true);
+      Logger.log("OK — read AND write access to folder: " + folder.getName());
     } else {
-      // Even without a folder ID, listing root touches the Drive scope.
       DriveApp.getRootFolder().getName();
       Logger.log("Drive access granted. Now paste your PHOTO_FOLDER_ID and re-deploy.");
     }
@@ -174,6 +177,13 @@ function doPost(e) {
     return jsonOutput_({ error: "invalid body" });
   }
 
+  // Image upload: saves a base64 image to the photo folder and returns a
+  // link-viewable URL. Used for per-order slips and proof photos so the big
+  // image data never goes into the orders Sheet cell.
+  if (body.action === "uploadImage") {
+    return jsonOutput_(uploadImage_(body));
+  }
+
   const key = body.key;
   const value = body.value;
   if (!key) return jsonOutput_({ error: "missing key" });
@@ -185,4 +195,38 @@ function doPost(e) {
     return jsonOutput_({ ok: false, error: String(err.message || err) });
   }
   return jsonOutput_({ ok: true });
+}
+
+// Saves a base64 data URL image into the photo folder (or a subfolder), makes
+// it link-viewable, and returns { ok, url }. Requires Drive WRITE permission —
+// run authorizeDrive() once and approve, then re-deploy.
+function uploadImage_(body) {
+  if (!PHOTO_FOLDER_ID) return { ok: false, error: "PHOTO_FOLDER_ID not set in Code.gs" };
+  try {
+    const dataUrl = String(body.dataUrl || "");
+    const m = dataUrl.match(/^data:([^;]+);base64,(.*)$/);
+    if (!m) return { ok: false, error: "not a base64 data URL" };
+    const contentType = m[1];
+    const bytes = Utilities.base64Decode(m[2]);
+    const ext = contentType.indexOf("png") !== -1 ? "png" : (contentType.indexOf("webp") !== -1 ? "webp" : "jpg");
+    const name = (body.name ? String(body.name).replace(/[^a-zA-Z0-9_-]/g, "") : "img_" + Date.now()) + "." + ext;
+    const blob = Utilities.newBlob(bytes, contentType, name);
+
+    const parent = DriveApp.getFolderById(PHOTO_FOLDER_ID);
+    // Keep order photos tidy in an "order-photos" subfolder.
+    let target = parent;
+    const subs = parent.getFoldersByName("order-photos");
+    target = subs.hasNext() ? subs.next() : parent.createFolder("order-photos");
+
+    const file = target.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    const id = file.getId();
+    return { ok: true, url: "https://drive.google.com/uc?export=view&id=" + id, id: id };
+  } catch (err) {
+    const msg = String(err.message || err);
+    if (msg.indexOf("permission") !== -1 || msg.indexOf("DriveApp") !== -1) {
+      return { ok: false, error: "Drive WRITE permission not granted. Run authorizeDrive() once, approve, then re-deploy a New version." };
+    }
+    return { ok: false, error: msg };
+  }
 }
